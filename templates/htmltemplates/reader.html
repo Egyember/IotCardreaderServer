@@ -1,0 +1,21 @@
+{{template "header" .Status}}
+<div class="container mx-auto m-3">
+	{{template "addModifieDelete" "readers"}}
+<table class="table table-striped table-bordered">
+	<tr>
+	<th>Id</th>
+	<th>ApiKey</th>
+	<th>Addcard</th>
+	<th>WriteCard</th>
+	</tr>
+{{range .Reader}}
+<tr>
+	<td>{{.Id}}</td>
+	<td>{{.ApiKey}}</td>
+	<td>{{.AddCard}}</td>
+	<td>{{.WriteCard}}</td>
+</tr>
+{{end}}
+</table>
+</div>
+{{template "footer"}}

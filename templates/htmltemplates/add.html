@@ -1,0 +1,13 @@
+{{template "header" .Status}}
+<div class="container col-lg-3 col-md-6 col-sm-12 border p-2 rounded mx-auto m-3">
+	<form>
+		{{range .Filds}}
+		<div class="mb-3">
+			<label for="{{.For}}" class="form-label">{{.For}}</label>
+			<input type="{{.Type}}" class="form-control" id="{{.For}}">
+		</div>
+		{{end}}
+		<button type="submit" class="btn btn-primary">send</button>
+	</form>
+</div>
+{{template "footer"}}

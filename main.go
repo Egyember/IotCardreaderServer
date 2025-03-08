@@ -40,21 +40,18 @@ type (
 		ReadKey      string
 		Owner        int
 	}
-	carddata struct {
-		Status headerdata
-		Cards  []card
-	}
 	cardReader struct {
 		Id        int
 		ApiKey    string
 		AddCard   bool
 		WriteCard bool
 	}
-	readerData struct {
-		Reader []cardReader
-		Status headerdata
+	people struct {
+		id         int
+		authtoken  string
+		name       string
+		permission string
 	}
-	people     struct{}
 	renderData struct {
 		Status headerdata
 		Filds  []map[string]any
@@ -102,78 +99,6 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func readerHandler(w http.ResponseWriter, r *http.Request) {
-	cont := r.Context()
-	status := headerdata{Loggedin: true, Title: "readers", Uname: username(cont.Value(username("uname")).(username))}
-	tx, err := database.Begin()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	rows, err := tx.Query("Select id, apiKey, addCard, writeCard from reader")
-	if err != nil {
-		fmt.Println(err)
-		tx.Rollback()
-		return
-	}
-	defer rows.Close()
-	var data readerData
-	data.Status = status
-	data.Reader = make([]cardReader, 0)
-	for rows.Next() {
-		var c cardReader
-		err := rows.Scan(&c.Id, &c.ApiKey, &c.AddCard, &c.WriteCard)
-		if err != nil {
-			fmt.Println("error: " + err.Error())
-			tx.Rollback()
-			return
-		}
-		data.Reader = append(data.Reader, c)
-	}
-	tx.Commit()
-	fmt.Println("render reader")
-	err = htmltmpl.ExecuteTemplate(w, "reader.html", data)
-	if err != nil {
-		fmt.Println(err)
-	}
-}
-
-func cardsHandler(w http.ResponseWriter, r *http.Request) {
-	cont := r.Context()
-	status := headerdata{Loggedin: true, Title: "cards", Uname: username(cont.Value(username("uname")).(username))}
-	tx, err := database.Begin()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	rows, err := tx.Query("Select serialNumber, writeKey, readKey, owner from cards")
-	if err != nil {
-		fmt.Println(err)
-		tx.Rollback()
-		return
-	}
-	defer rows.Close()
-	var data carddata
-	data.Status = status
-	data.Cards = make([]card, 0)
-	for rows.Next() {
-		var c card
-		err := rows.Scan(&c.SerialNumber, &c.WriteKey, &c.ReadKey, &c.Owner)
-		if err != nil {
-			fmt.Println("error: " + err.Error())
-			tx.Rollback()
-			return
-		}
-		data.Cards = append(data.Cards, c)
-	}
-	tx.Commit()
-	fmt.Println("render cards")
-	err = htmltmpl.ExecuteTemplate(w, "cards.html", data)
-	if err != nil {
-		fmt.Println(err)
-	}
-}
-
 func tableFactory(title string, fildNames []string) http.HandlerFunc {
 	sqlfilds := ""
 	for _, v := range fildNames {
@@ -182,20 +107,17 @@ func tableFactory(title string, fildNames []string) http.HandlerFunc {
 	}
 	sqlfilds = sqlfilds[0:(len(sqlfilds) - 2)]
 	query := fmt.Sprintf("Select %s from people", sqlfilds)
-	fmt.Println(query)
 	args := struct {
 		FildNames []string
 		Url       string
 	}{fildNames, title}
 	buff := new(bytes.Buffer)
 	txttmpl.ExecuteTemplate(buff, "magic.html.tmpl", args)
-	tempgened := buff.String()
-	fmt.Println(tempgened)
 	templ, err := htmltmpl.Clone()
 	if err != nil {
 		panic(err)
 	}
-	templ, err = templ.Parse(tempgened)
+	templ, err = templ.Parse(buff.String())
 	if err != nil {
 		fmt.Println("fuck this shit")
 		panic(err)
@@ -310,7 +232,9 @@ func main() {
 	defer database.Close()
 	http.HandleFunc("GET /{$}", rootHandler)
 	http.Handle("/admin", loginNeeded(http.HandlerFunc(admin)))
+	cardsHandler := tableFactory("cards", []string{"serialNumber", "writeKey", "readKey", "owner"})
 	http.Handle("/admin/cards", loginNeeded(http.HandlerFunc(cardsHandler)))
+	readerHandler := tableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"})
 	http.Handle("/admin/readers", loginNeeded(http.HandlerFunc(readerHandler)))
 	peopleHandler := tableFactory("people", []string{"id", "authtoken", "name", "permission"})
 	http.Handle("/admin/people", loginNeeded(http.HandlerFunc(peopleHandler)))

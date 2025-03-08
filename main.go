@@ -24,7 +24,7 @@ var (
 	dbpath   = flag.String("dbpath", "./database.db", "path to the db file")
 	database *sql.DB
 	htmltmpl *htmltemplate.Template
-	sqltmpl  *template.Template
+	txttmpl  *template.Template
 )
 
 type (
@@ -53,6 +53,11 @@ type (
 	readerData struct {
 		Reader []cardReader
 		Status headerdata
+	}
+	people     struct{}
+	renderData struct {
+		Status headerdata
+		Filds  []map[string]any
 	}
 )
 
@@ -97,7 +102,7 @@ func admin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func reader(w http.ResponseWriter, r *http.Request) {
+func readerHandler(w http.ResponseWriter, r *http.Request) {
 	cont := r.Context()
 	status := headerdata{Loggedin: true, Title: "readers", Uname: username(cont.Value(username("uname")).(username))}
 	tx, err := database.Begin()
@@ -133,7 +138,7 @@ func reader(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func cards(w http.ResponseWriter, r *http.Request) {
+func cardsHandler(w http.ResponseWriter, r *http.Request) {
 	cont := r.Context()
 	status := headerdata{Loggedin: true, Title: "cards", Uname: username(cont.Value(username("uname")).(username))}
 	tx, err := database.Begin()
@@ -169,6 +174,85 @@ func cards(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func tableFactory(title string, fildNames []string) http.HandlerFunc {
+	sqlfilds := ""
+	for _, v := range fildNames {
+		sqlfilds += v
+		sqlfilds += ", "
+	}
+	sqlfilds = sqlfilds[0:(len(sqlfilds) - 2)]
+	query := fmt.Sprintf("Select %s from people", sqlfilds)
+	fmt.Println(query)
+	args := struct {
+		FildNames []string
+		Url       string
+	}{fildNames, title}
+	buff := new(bytes.Buffer)
+	txttmpl.ExecuteTemplate(buff, "magic.html.tmpl", args)
+	tempgened := buff.String()
+	fmt.Println(tempgened)
+	templ, err := htmltmpl.Clone()
+	if err != nil {
+		panic(err)
+	}
+	templ, err = templ.Parse(tempgened)
+	if err != nil {
+		fmt.Println("fuck this shit")
+		panic(err)
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		cont := r.Context()
+		status := headerdata{Loggedin: true, Title: title, Uname: username(cont.Value(username("uname")).(username))}
+		tx, err := database.Begin()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		rows, err := tx.Query(query)
+		if err != nil {
+			fmt.Println(err)
+			tx.Rollback()
+			return
+		}
+		defer rows.Close()
+
+		var data renderData
+		data.Status = status
+		data.Filds = make([]map[string]any, 0)
+		cols, _ := rows.Columns()
+		for rows.Next() {
+			// Create a slice of interface{}'s to represent each column,
+			// and a second slice to contain pointers to each item in the columns slice.
+			columns := make([]interface{}, len(cols))
+			columnPointers := make([]interface{}, len(cols))
+			for i := range columns {
+				columnPointers[i] = &columns[i]
+			}
+
+			err := rows.Scan(columnPointers...)
+			if err != nil {
+				fmt.Println("error: " + err.Error())
+				tx.Rollback()
+				return
+			}
+			m := make(map[string]interface{})
+			for i, colName := range cols {
+				val := columnPointers[i].(*interface{})
+				m[colName] = *val
+			}
+			data.Filds = append(data.Filds, m)
+		}
+		fmt.Println(data.Filds)
+		tx.Commit()
+		fmt.Println("render people")
+		err = templ.ExecuteTemplate(w, "magic", data)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
 	// init templates
@@ -178,11 +262,11 @@ func main() {
 		panic(err)
 	}
 	htmltmpl = htmltemplate.Must(htmltmpl.ParseFS(htmlfs, "*html"))
-	sqlfs, err := fs.Sub(embedFs, "templates/sqltemplates")
+	txtfs, err := fs.Sub(embedFs, "templates/txttemplates")
 	if err != nil {
 		panic(err)
 	}
-	sqltmpl = template.Must(template.ParseFS(sqlfs, "*sql"))
+	txttmpl = template.Must(template.ParseFS(txtfs, "*tmpl"))
 	// init a new db if file dosn't exist
 	if _, err := os.Stat(*dbpath); errors.Is(err, os.ErrNotExist) {
 		fd, err := os.Create(*dbpath)
@@ -201,7 +285,7 @@ func main() {
 			panic(err)
 		}
 		create := new(bytes.Buffer)
-		err = sqltmpl.ExecuteTemplate(create, "create.sql", nil)
+		err = txttmpl.ExecuteTemplate(create, "create.sql.tmpl", nil)
 		if err != nil {
 			os.Remove(*dbpath)
 			panic(err)
@@ -226,8 +310,10 @@ func main() {
 	defer database.Close()
 	http.HandleFunc("GET /{$}", rootHandler)
 	http.Handle("/admin", loginNeeded(http.HandlerFunc(admin)))
-	http.Handle("/admin/cards", loginNeeded(http.HandlerFunc(cards)))
-	http.Handle("/admin/readers", loginNeeded(http.HandlerFunc(reader)))
+	http.Handle("/admin/cards", loginNeeded(http.HandlerFunc(cardsHandler)))
+	http.Handle("/admin/readers", loginNeeded(http.HandlerFunc(readerHandler)))
+	peopleHandler := tableFactory("people", []string{"id", "authtoken", "name", "permission"})
+	http.Handle("/admin/people", loginNeeded(http.HandlerFunc(peopleHandler)))
 	http.HandleFunc("/admin/login", login)
 	http.ListenAndServe(":8090", nil)
 }

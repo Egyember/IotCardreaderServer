@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"database/sql"
 	"embed"
 	"errors"
@@ -16,6 +17,8 @@ import (
 	"text/template"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -23,20 +26,28 @@ import (
 var embedFs embed.FS
 
 var (
-	dbpath    = flag.String("dbpath", "./database.db", "path to the db file")
 	database  *sql.DB
 	htmltmpl  *htmltemplate.Template
 	txttmpl   *template.Template
 	authstore autstore
 )
 
+var (
+	dbpath   = flag.String("dbpath", "./database.db", "path to the db file")
+	addUser  = flag.Bool("add", false, "add admin to database")
+	adminTab = flag.Bool("A", false, "add admin with adminTab permission")
+	username = flag.String("u", "", "username when adding user to db")
+	password = flag.String("p", "", "username when adding user to db")
+)
+
 var ErrInvalidCooki = errors.New("invalid auth cookie")
 
 type (
-	username   string
+	contextkey string
 	headerdata struct {
-		Uname    username
+		Uname    string
 		Loggedin bool
+		AdminTab bool
 		Title    string
 	}
 	card struct {
@@ -62,9 +73,10 @@ type (
 		Filds  []map[string]any
 	}
 	authcookie struct {
-		cookie string
-		uname  string
-		time   time.Time
+		cookie   string
+		uname    string
+		time     time.Time
+		adminTab bool
 	}
 	autstore struct {
 		cookies []authcookie
@@ -74,23 +86,24 @@ type (
 	}
 )
 
-func (s *autstore) valid(cookie string) (string, error) {
+func (s *autstore) valid(cookie string) (string, bool, error) {
 	s.lock.Lock()
 	for k, v := range s.cookies {
 		if (v.cookie == cookie) && (time.Since(v.time) < 1*time.Hour) {
 			s.cookies[k].time = time.Now()
 			uname := v.uname
+			ad := v.adminTab
 			s.lock.Unlock()
-			return uname, nil
+			return uname, ad, nil
 		}
 	}
 	s.lock.Unlock()
-	return "", ErrInvalidCooki
+	return "", false, ErrInvalidCooki
 }
 
-func (s *autstore) add(cookie, uname string) {
+func (s *autstore) add(cookie, uname string, admintab bool) {
 	now := time.Now()
-	c := authcookie{cookie: cookie, uname: uname, time: now}
+	c := authcookie{cookie: cookie, uname: uname, time: now, adminTab: admintab}
 	s.lock.Lock()
 	s.cookies = append(s.cookies, c)
 	s.lock.Unlock()
@@ -119,7 +132,7 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, "./admin", http.StatusSeeOther)
 }
 
-func loginNeeded(next http.Handler) http.Handler {
+func loginNeeded(next http.Handler, admintab bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("AUTH")
 		if err != nil {
@@ -128,41 +141,91 @@ func loginNeeded(next http.Handler) http.Handler {
 				return
 			}
 		}
-		// todo: verifie the cookie
-		uname, err := authstore.valid(c.Value)
+		uname, at, err := authstore.valid(c.Value)
 		if err != nil {
 			http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 			return
 		}
+		if admintab {
+			if !at {
+				http.Error(w, "Access Denied", http.StatusForbidden)
+				return
+			}
+		}
 		cont := r.Context()
-		cont = context.WithValue(cont, username("uname"), uname)
+		cont = context.WithValue(cont, contextkey("uname"), uname)
+		cont = context.WithValue(cont, contextkey("adminTab"), at)
 		next.ServeHTTP(w, r.WithContext(cont))
+		return
 	})
 }
 
+func computepwHash(pw []byte) []byte {
+	hash, _ := bcrypt.GenerateFromPassword(pw, bcrypt.DefaultCost)
+	return hash
+}
+
 func login(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		err := r.ParseForm()
-		if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-		//	uname := r.PostFormValue("username")
-		//	passwd := r.PostFormValue("password")
-	} else {
-		status := headerdata{Loggedin: false, Title: "login"}
-		fmt.Println("render login")
-		err := htmltmpl.ExecuteTemplate(w, "login.html", status)
+	drawLogin := func(Failed bool) {
+		status := headerdata{Loggedin: false, Title: "login", AdminTab: false}
+		err := htmltmpl.ExecuteTemplate(w, "login.html", struct {
+			Status headerdata
+			Failed bool
+		}{Status: status, Failed: Failed})
 		if err != nil {
 			fmt.Println(err)
 		}
+	}
+	if r.Method == http.MethodPost {
+		err := r.ParseForm()
+		if err != nil {
+			fmt.Println("error: ", err.Error())
+			return
+		}
+		uname := r.FormValue("username")
+		passwd := r.FormValue("password")
+		tx, err := database.Begin()
+		if err != nil {
+			fmt.Println("error: ", err.Error())
+			return
+		}
+		row := tx.QueryRow("SELECT pwhash, adminTab FROM admins WHERE username=? LIMIT 1", uname)
+		var dbHash string
+		var adminTab bool
+		err = row.Scan(&dbHash, &adminTab)
+		if err != nil {
+			fmt.Println("error: ", err.Error())
+			drawLogin(true)
+			return
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(dbHash), []byte(passwd))
+		if err != nil {
+			fmt.Println(err)
+			drawLogin(true)
+		}
+		authtoken := crand.Text()
+		authstore.add(authtoken, uname, adminTab.(bool))
+		cookie := http.Cookie{
+			Name:     "AUTH",
+			Value:    authtoken,
+			Path:     "/",
+			MaxAge:   3600,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		}
+		http.SetCookie(w, &cookie)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	} else {
+		drawLogin(false)
 	}
 }
 
 func admin(w http.ResponseWriter, r *http.Request) {
 	cont := r.Context()
-	uname := cont.Value(username("uname")).(username)
-	status := headerdata{Loggedin: true, Title: "main", Uname: username(uname)}
+	uname := cont.Value(contextkey("uname")).(string)
+	admintab := cont.Value(contextkey("uname")).(bool)
+	status := headerdata{Loggedin: true, Title: "main", Uname: uname, AdminTab: admintab}
 	fmt.Println("render main")
 	err := htmltmpl.ExecuteTemplate(w, "home.html", status)
 	if err != nil {
@@ -196,7 +259,9 @@ func tableFactory(title string, fildNames []string, table string) http.HandlerFu
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		cont := r.Context()
-		status := headerdata{Loggedin: true, Title: title, Uname: username(cont.Value(username("uname")).(username))}
+		uname := cont.Value(contextkey("uname")).(string)
+		admintab := cont.Value(contextkey("uname")).(bool)
+		status := headerdata{Loggedin: true, Title: title, Uname: uname, AdminTab: admintab}
 		tx, err := database.Begin()
 		if err != nil {
 			fmt.Println(err)
@@ -300,6 +365,17 @@ func main() {
 		panic(err)
 	}
 	defer database.Close()
+	if *addUser {
+		tx, _ := database.Begin()
+		_, err := tx.Exec("INSERT INTO admins (username, pwhash, adminTab) VALUES (?, ?, ?)", *username, computepwHash([]byte(*password)), *adminTab)
+		if err != nil {
+			fmt.Println("failed: ", err.Error())
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+		return
+	}
 
 	// cooki store init
 	authstore.cookies = make([]authcookie, 0)
@@ -308,15 +384,17 @@ func main() {
 	go authstore.Clean()
 
 	http.HandleFunc("GET /{$}", rootHandler)
-	http.Handle("/admin", loginNeeded(http.HandlerFunc(admin)))
+	http.Handle("/admin", loginNeeded(http.HandlerFunc(admin), false))
 	cardsHandler := tableFactory("cards", []string{"serialNumber", "writeKey", "readKey", "owner"}, "cards")
-	http.Handle("/admin/cards", loginNeeded(http.HandlerFunc(cardsHandler)))
+	http.Handle("/admin/cards", loginNeeded(http.HandlerFunc(cardsHandler), false))
 	readerHandler := tableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, "reader")
-	http.Handle("/admin/readers", loginNeeded(http.HandlerFunc(readerHandler)))
+	http.Handle("/admin/readers", loginNeeded(http.HandlerFunc(readerHandler), false))
 	peopleHandler := tableFactory("people", []string{"id", "authtoken", "name", "permission"}, "people")
-	http.Handle("/admin/people", loginNeeded(http.HandlerFunc(peopleHandler)))
+	http.Handle("/admin/people", loginNeeded(http.HandlerFunc(peopleHandler), false))
 	logHandler := tableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
-	http.Handle("/admin/logs", loginNeeded(http.HandlerFunc(logHandler)))
+	http.Handle("/admin/logs", loginNeeded(http.HandlerFunc(logHandler), false))
+	adminsHandler := tableFactory("logs", []string{"id", "username", "pwhash", "adminTab"}, "admins")
+	http.Handle("/admin/admins", loginNeeded(http.HandlerFunc(adminsHandler), true))
 	http.HandleFunc("/admin/login", login)
 	http.ListenAndServe(":8090", nil)
 

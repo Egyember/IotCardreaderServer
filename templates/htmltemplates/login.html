@@ -1,15 +1,21 @@
-{{template "header" .}}
+{{template "header" .Status}}
 <div class="container col-lg-3 col-md-6 col-sm-12 border p-2 rounded mx-auto m-3">
-	<form>
+		<form method="post">
 		<div class="mb-3">
 			<label for="username" class="form-label">username</label>
-			<input type="username" class="form-control" id="username">
+			<input type="username" class="form-control" id="username" name="username">
 		</div>
 		<div class="mb-3">
 			<label for="password" class="form-label">Password</label>
-			<input type="password" class="form-control" id="password">
+			<input type="password" class="form-control" id="password" name="password">
 		</div>
 		<button type="submit" class="btn btn-primary">login</button>
 	</form>
 </div>
+{{if .Failed}}
+<div class="container col-lg-3 col-md-6 col-sm-12 border p-2 rounded mx-auto m-3 alert alert-danger">
+	Sikertelen bejelentkezés. 
+</div>
+{{end}}
+
 {{template "footer"}}

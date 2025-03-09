@@ -42,5 +42,6 @@ CREATE TABLE accessLog (
 CREATE TABLE admins (
 	id INTEGER PRIMARY KEY not NULL UNIQUE,
 	username VARCHAR(255) not NULL UNIQUE,
-	pwhash TEXT not NULL --idq the type right now
+	pwhash TEXT not NULL, --idq the type right now
+	adminTab BOOL not NULL
 );

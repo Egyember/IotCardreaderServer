@@ -35,8 +35,9 @@
 						</li>
 					</ul>
 					{{if .Loggedin}}
-					{{.Uname}}
-					<a class="nav-link" aria-current="page" href="/admin/login">logout</a>
+					<div>{{.Uname}}
+					</div>
+					<a class="nav-link" aria-current="page" href="/admin/logout">logout</a>
 					{{else}}
 					<div class="btn btn-primary">
 					<a class="nav-link" aria-current="page" href="/admin/login">login</a>

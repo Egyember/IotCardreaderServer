@@ -152,6 +152,9 @@ func loginNeeded(next http.Handler, admintab bool) http.Handler {
 				return
 			}
 		}
+		c.MaxAge = 3600
+		c.Path = "/"
+		http.SetCookie(w, c)
 		cont := r.Context()
 		cont = context.WithValue(cont, contextkey("uname"), uname)
 		cont = context.WithValue(cont, contextkey("adminTab"), at)
@@ -204,7 +207,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 			drawLogin(true)
 		}
 		authtoken := crand.Text()
-		authstore.add(authtoken, uname, adminTab.(bool))
+		authstore.add(authtoken, uname, adminTab)
 		cookie := http.Cookie{
 			Name:     "AUTH",
 			Value:    authtoken,
@@ -212,7 +215,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   3600,
 			HttpOnly: true,
 			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
+			SameSite: http.SameSiteStrictMode,
 		}
 		http.SetCookie(w, &cookie)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -221,10 +224,21 @@ func login(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func logout(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("AUTH")
+	if err != nil {
+		println(err)
+		return
+	}
+	c.MaxAge=-1
+	http.SetCookie(w, c)
+	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+}
+
 func admin(w http.ResponseWriter, r *http.Request) {
 	cont := r.Context()
 	uname := cont.Value(contextkey("uname")).(string)
-	admintab := cont.Value(contextkey("uname")).(bool)
+	admintab := cont.Value(contextkey("adminTab")).(bool)
 	status := headerdata{Loggedin: true, Title: "main", Uname: uname, AdminTab: admintab}
 	fmt.Println("render main")
 	err := htmltmpl.ExecuteTemplate(w, "home.html", status)
@@ -232,6 +246,7 @@ func admin(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 	}
 }
+
 
 func tableFactory(title string, fildNames []string, table string) http.HandlerFunc {
 	sqlfilds := ""
@@ -260,7 +275,7 @@ func tableFactory(title string, fildNames []string, table string) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		cont := r.Context()
 		uname := cont.Value(contextkey("uname")).(string)
-		admintab := cont.Value(contextkey("uname")).(bool)
+		admintab := cont.Value(contextkey("adminTab")).(bool)
 		status := headerdata{Loggedin: true, Title: title, Uname: uname, AdminTab: admintab}
 		tx, err := database.Begin()
 		if err != nil {
@@ -308,7 +323,86 @@ func tableFactory(title string, fildNames []string, table string) http.HandlerFu
 		}
 	}
 }
-func addFactory() {}
+func addFactory(title string, fildNames []string, fildTypes []string, table string) http.HandlerFunc {
+	type FildNames struct{
+			Name string
+			Type string
+		}
+	fnames := make([]FildNames, len(fildNames))
+	for k, v:= range fildNames{
+		fnames[k].Name = v
+		fnames[k].Type = fildTypes[k]
+	}
+	args := struct {
+		FildNames []FildNames
+		Url       string
+	}{fnames, title}
+	buff := new(bytes.Buffer)
+	txttmpl.ExecuteTemplate(buff, "magicAdd.html.tmpl", args)
+	templ, err := htmltmpl.Clone()
+	if err != nil {
+		panic(err)
+	}
+	templ, err = templ.Parse(buff.String())
+	if err != nil {
+		fmt.Println("fuck this shit")
+		panic(err)
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		cont := r.Context()
+		uname := cont.Value(contextkey("uname")).(string)
+		admintab := cont.Value(contextkey("adminTab")).(bool)
+		status := headerdata{Loggedin: true, Title: title, Uname: uname, AdminTab: admintab}
+		err = templ.ExecuteTemplate(w, "magicadd", status)
+		return
+		tx, err := database.Begin()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		rows, err := tx.Query("")
+		if err != nil {
+			fmt.Println(err)
+			tx.Rollback()
+			return
+		}
+		defer rows.Close()
+
+		var data renderData
+		data.Status = status
+		data.Filds = make([]map[string]any, 0)
+		cols, _ := rows.Columns()
+		for rows.Next() {
+			// Create a slice of interface{}'s to represent each column,
+			// and a second slice to contain pointers to each item in the columns slice.
+			columns := make([]interface{}, len(cols))
+			columnPointers := make([]interface{}, len(cols))
+			for i := range columns {
+				columnPointers[i] = &columns[i]
+			}
+
+			err := rows.Scan(columnPointers...)
+			if err != nil {
+				fmt.Println("error: " + err.Error())
+				tx.Rollback()
+				return
+			}
+			m := make(map[string]interface{})
+			for i, colName := range cols {
+				val := columnPointers[i].(*interface{})
+				m[colName] = *val
+			}
+			data.Filds = append(data.Filds, m)
+		}
+		tx.Commit()
+		err = templ.ExecuteTemplate(w, "magicadd", data)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
+}
 
 func main() {
 	flag.Parse()
@@ -383,6 +477,9 @@ func main() {
 	authstore.done = make(chan bool)
 	go authstore.Clean()
 
+	addfoo := addFactory("add foo", []string{"foo", "bar"}, []string{"foot", "bart"}, "asd0")
+	http.Handle("/foo", loginNeeded(http.HandlerFunc(addfoo), false))
+
 	http.HandleFunc("GET /{$}", rootHandler)
 	http.Handle("/admin", loginNeeded(http.HandlerFunc(admin), false))
 	cardsHandler := tableFactory("cards", []string{"serialNumber", "writeKey", "readKey", "owner"}, "cards")
@@ -395,6 +492,7 @@ func main() {
 	http.Handle("/admin/logs", loginNeeded(http.HandlerFunc(logHandler), false))
 	adminsHandler := tableFactory("logs", []string{"id", "username", "pwhash", "adminTab"}, "admins")
 	http.Handle("/admin/admins", loginNeeded(http.HandlerFunc(adminsHandler), true))
+	http.Handle("/admin/logout", loginNeeded(http.HandlerFunc(logout), false))
 	http.HandleFunc("/admin/login", login)
 	http.ListenAndServe(":8090", nil)
 

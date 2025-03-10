@@ -1,7 +1,7 @@
 {{"{{"}}define "magicadd" {{"}}"}}
 {{"{{"}}template "header" .{{"}}"}}
 <div class="container mx-auto m-3">
-<form metod="post" action="/admin/{{.Url}}/add">
+<form method="post" action="/admin/{{.Url}}/add">
 		{{range .FildNames}}
 		<div class="mb-3 form-check">
 			<input type="checkbox" class="form-check-input" id="{{.Name}}box" name="{{.Name}}box">

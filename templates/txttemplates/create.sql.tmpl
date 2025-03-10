@@ -13,13 +13,13 @@ CREATE TABLE reader (
 
 CREATE TABLE people (
 	id INTEGER PRIMARY KEY not NULL UNIQUE,
-	authtoken VARCHAR(255) not NULL,
 	name VARCHAR(255) not NULL,
 	permission VARCHAR(255) not NULL
 );
 
 CREATE TABLE cards (
 	serialNumber VARCHAR(255) not NULL UNIQUE,
+	authtoken VARCHAR(255) not NULL,
 	writeKey VARCHAR(255) not NULL,
 	readKey VARCHAR(255) not NULL,
 	owner INTEGER not NULL,

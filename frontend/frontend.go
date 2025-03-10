@@ -36,24 +36,6 @@ type (
 		AdminTab bool
 		Title    string
 	}
-	card struct {
-		SerialNumber string
-		WriteKey     string
-		ReadKey      string
-		Owner        int
-	}
-	cardReader struct {
-		Id        int
-		ApiKey    string
-		AddCard   bool
-		WriteCard bool
-	}
-	people struct {
-		id         int
-		authtoken  string
-		name       string
-		permission string
-	}
 	renderData struct {
 		Status headerdata
 		Filds  []map[string]any
@@ -393,4 +375,27 @@ func AddFactory(title string, fildNames []string, fildTypes []string, table stri
 		status := headerdata{Loggedin: true, Title: title, Uname: uname, AdminTab: admintab}
 		err = templ.ExecuteTemplate(w, "magicadd", status)
 	}
+}
+
+func AddEndpoints() {
+	http.HandleFunc("GET /{$}", RootHandler)
+	http.Handle("/admin", LoginNeeded(http.HandlerFunc(Admin), false))
+	cardsHandler := TableFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, "cards")
+	cardsAdd := AddFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, []string{"text", "text", "text", "text", "number"}, "cards")
+	http.Handle("/admin/cards", LoginNeeded(http.HandlerFunc(cardsHandler), false))
+	http.Handle("/admin/cards/add", LoginNeeded(http.HandlerFunc(cardsAdd), false))
+	readerHandler := TableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, "reader")
+	readerAdd := AddFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, []string{"number", "text", "number", "number"}, "reader")
+	http.Handle("/admin/readers", LoginNeeded(http.HandlerFunc(readerHandler), false))
+	http.Handle("/admin/readers/add", LoginNeeded(http.HandlerFunc(readerAdd), false))
+	peopleHandler := TableFactory("people", []string{"id", "name", "permission"}, "people")
+	peopleAdd := AddFactory("people", []string{"id", "name", "permission"}, []string{"number", "text", "text"}, "people")
+	http.Handle("/admin/people", LoginNeeded(http.HandlerFunc(peopleHandler), false))
+	http.Handle("/admin/people/add", LoginNeeded(http.HandlerFunc(peopleAdd), false))
+	logHandler := TableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
+	http.Handle("/admin/logs", LoginNeeded(http.HandlerFunc(logHandler), false))
+	adminsHandler := TableFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, "admins")
+	http.Handle("/admin/admins", LoginNeeded(http.HandlerFunc(adminsHandler), true))
+	http.Handle("/admin/logout", LoginNeeded(http.HandlerFunc(Logout), false))
+	http.HandleFunc("/admin/login", Login)
 }

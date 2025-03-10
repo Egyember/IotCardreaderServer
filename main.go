@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	htmltemplate "html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -35,6 +37,120 @@ var (
 	username = flag.String("u", "", "username when adding user to db")
 	password = flag.String("p", "", "username when adding user to db")
 )
+
+type (
+	card struct {
+		SerialNumber string `json:"serialnumber"`
+		Authtoken    string `json:"authtoken"`
+		WriteKey     string `json:"writekey"`
+		ReadKey      string `json:"readkey"`
+		Owner        int    `json:"owner"`
+	}
+	cardReader struct {
+		Id        int
+		ApiKey    string
+		AddCard   bool
+		WriteCard bool
+	}
+	people struct {
+		Id         int    `json:"ok"`
+		Name       string `json:"name"`
+		Permission string `json:"perm"`
+	}
+	keyRequest struct {
+		ApiKey       string `json:"apikey"`
+		SerialNumber string `json:"serialnumber"`
+		Write        bool   `json:"write"`
+	}
+	keyAns struct {
+		Ok  bool   `json:"ok"`
+		Key string `json:"key"`
+	}
+	verifyRequest struct {
+		ApiKey       string `json:"apikey"`
+		Authtoken    string `json:"authtoken"`
+		SerialNumber string `json:"serialnumber"`
+	}
+	verifyAns struct {
+		Ok         bool   `json:"ok"`
+		Name       string `json:"name"`
+		Permission string `json:"perm"`
+	}
+)
+
+func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-type") != "application/json" {
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	var request verifyRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		ans := verifyAns{
+			Ok:         false,
+			Name:       "",
+			Permission: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		return
+	}
+	tx, err := database.Begin()
+	defer tx.Rollback()
+	if err != nil {
+		panic(err)
+	}
+	row := tx.QueryRow("SELECT apiKey FROM reader WHERE apiKey = ? LIMIT 1", request.ApiKey)
+	err = row.Err()
+	if err != nil {
+		ans := verifyAns{
+			Ok:         false,
+			Name:       "",
+			Permission: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("bad api key")
+		return
+	}
+	row = tx.QueryRow("SELECT people.name, people.permission FROM cards WHERE cards.authtoken = ? and cards.serialNumber = ? INNER JOIN people LIMIT 1", request.Authtoken, request.SerialNumber)
+	Name := ""
+	Perm := ""
+	err = row.Scan(&Name, &Perm)
+	if err != nil {
+		ans := verifyAns{
+			Ok:         false,
+			Name:       "",
+			Permission: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("bad serial number & auth key")
+		return
+	}
+	ans := verifyAns{
+		Ok:         true,
+		Name:       Name,
+		Permission: Perm,
+	}
+	js, err := json.Marshal(ans)
+	if err != nil {
+		panic(err)
+	}
+	w.Write(js)
+}
 
 func main() {
 	flag.Parse()
@@ -107,32 +223,14 @@ func main() {
 
 	frontend.Database = database
 
-	// cooki store init
+	// frontend cooki store init
 	frontend.Authstore.Cookies = make([]frontend.Authcookie, 0)
 	frontend.Authstore.Ticker = *time.NewTicker(1 * time.Hour)
 	frontend.Authstore.Done = make(chan bool)
 	go frontend.Authstore.Clean()
+	frontend.AddEndpoints()
 
-	http.HandleFunc("GET /{$}", frontend.RootHandler)
-	http.Handle("/admin", frontend.LoginNeeded(http.HandlerFunc(frontend.Admin), false))
-	cardsHandler := frontend.TableFactory("cards", []string{"serialNumber", "writeKey", "readKey", "owner"}, "cards")
-	cardsAdd := frontend.AddFactory("cards", []string{"serialNumber", "writeKey", "readKey", "owner"}, []string{"text", "text", "text", "number"}, "cards")
-	http.Handle("/admin/cards", frontend.LoginNeeded(http.HandlerFunc(cardsHandler), false))
-	http.Handle("/admin/cards/add", frontend.LoginNeeded(http.HandlerFunc(cardsAdd), false))
-	readerHandler := frontend.TableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, "reader")
-	readerAdd := frontend.AddFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, []string{"number", "text", "number", "number"}, "reader")
-	http.Handle("/admin/readers", frontend.LoginNeeded(http.HandlerFunc(readerHandler), false))
-	http.Handle("/admin/readers/add", frontend.LoginNeeded(http.HandlerFunc(readerAdd), false))
-	peopleHandler := frontend.TableFactory("people", []string{"id", "authtoken", "name", "permission"}, "people")
-	peopleAdd := frontend.AddFactory("people", []string{"id", "authtoken", "name", "permission"}, []string{"number", "text", "text", "text"}, "people")
-	http.Handle("/admin/people", frontend.LoginNeeded(http.HandlerFunc(peopleHandler), false))
-	http.Handle("/admin/people/add", frontend.LoginNeeded(http.HandlerFunc(peopleAdd), false))
-	logHandler := frontend.TableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
-	http.Handle("/admin/logs", frontend.LoginNeeded(http.HandlerFunc(logHandler), false))
-	adminsHandler := frontend.TableFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, "admins")
-	http.Handle("/admin/admins", frontend.LoginNeeded(http.HandlerFunc(adminsHandler), true))
-	http.Handle("/admin/logout", frontend.LoginNeeded(http.HandlerFunc(frontend.Logout), false))
-	http.HandleFunc("/admin/login", frontend.Login)
+	http.HandleFunc("POST /api/request/verify", verifyRequestHandler)
 	http.ListenAndServe(":8090", nil)
 
 	frontend.Authstore.Done <- true

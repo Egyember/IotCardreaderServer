@@ -78,6 +78,17 @@ type (
 	}
 )
 
+func addLog(card, reader, people, allowed, direction, comment any){
+	tx, err := database.Begin()
+	defer tx.Commit()
+	if err != nil {
+		panic(err)
+	}
+	_, err = tx.Exec("INSERT INTO accessLog (card, reader, people, allowed, direction, comment) VALUES (?, ?, ?, ?, ?, ?)", card, reader, people, allowed, direction, comment)
+	if err != nil {
+		panic(err)
+	}
+}
 func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-type") != "application/json" {
 		return
@@ -102,13 +113,15 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tx, err := database.Begin()
-	defer tx.Rollback()
 	if err != nil {
 		panic(err)
 	}
-	row := tx.QueryRow("SELECT apiKey FROM reader WHERE apiKey = ? LIMIT 1", request.ApiKey)
-	err = row.Err()
+	row := tx.QueryRow("SELECT id FROM reader WHERE apiKey = ?", request.ApiKey)
+	var readerId string
+	err = row.Scan(&readerId)
 	if err != nil {
+		tx.Rollback()
+		fmt.Println(err.Error())
 		ans := verifyAns{
 			Ok:         false,
 			Name:       "",
@@ -120,13 +133,17 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write(js)
 		fmt.Println("bad api key")
+		addLog(request.SerialNumber, nil, nil, false, nil, nil)
 		return
 	}
-	row = tx.QueryRow("SELECT people.name, people.permission FROM cards WHERE cards.authtoken = ? and cards.serialNumber = ? INNER JOIN people LIMIT 1", request.Authtoken, request.SerialNumber)
+	row = tx.QueryRow("SELECT people.id, name, permission FROM cards INNER JOIN people ON cards.owner = people.id WHERE cards.authtoken = ? and cards.serialNumber = ?", request.Authtoken, request.SerialNumber)
+	//INNER JOIN people ON cards.owner = people.id
+	peopleId := 0
 	Name := ""
 	Perm := ""
-	err = row.Scan(&Name, &Perm)
+	err = row.Scan(&peopleId, &Name, &Perm)
 	if err != nil {
+		tx.Rollback()
 		ans := verifyAns{
 			Ok:         false,
 			Name:       "",
@@ -138,6 +155,7 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write(js)
 		fmt.Println("bad serial number & auth key")
+		addLog(request.SerialNumber, readerId, nil, false, nil, nil)
 		return
 	}
 	ans := verifyAns{
@@ -150,7 +168,14 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 	w.Write(js)
+	tx.Rollback()
+	addLog(request.SerialNumber, readerId, peopleId, true, nil, nil)
 }
+
+func keyRequestHandler(w http.ResponseWriter, r *http.Request) {
+	
+}
+
 
 func main() {
 	flag.Parse()
@@ -207,7 +232,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	database.SetMaxOpenConns(2)
 	defer database.Close()
 	if *addUser {
 		tx, _ := database.Begin()

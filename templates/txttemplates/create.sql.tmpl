@@ -28,11 +28,11 @@ CREATE TABLE cards (
 );
 CREATE TABLE accessLog (
 	id INTEGER PRIMARY KEY not NULL UNIQUE,
-	card INTEGER not NULL,
-	reader INTEGER not NULL,
-	people INTEGER not NULL,
+	card varchar(255),
+	reader INTEGER,
+	people INTEGER,
 	allowed BOOL not NULL,
-	direction CHAR(2) not NULL, 
+	direction TEXT, 
 	comment TEXT,
 	FOREIGN KEY (card) REFERENCES cards(id),
 	FOREIGN KEY (reader) REFERENCES reader(id),

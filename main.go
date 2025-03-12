@@ -117,7 +117,7 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 	row := tx.QueryRow("SELECT id FROM reader WHERE apiKey = ?", request.ApiKey)
-	var readerId string
+	var readerId int 
 	err = row.Scan(&readerId)
 	if err != nil {
 		tx.Rollback()

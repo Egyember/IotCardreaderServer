@@ -78,7 +78,7 @@ type (
 	}
 )
 
-func addLog(card, reader, people, allowed, direction, comment any){
+func addLog(card, reader, people, allowed, direction, comment any) {
 	tx, err := database.Begin()
 	defer tx.Commit()
 	if err != nil {
@@ -89,10 +89,8 @@ func addLog(card, reader, people, allowed, direction, comment any){
 		panic(err)
 	}
 }
+
 func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Content-type") != "application/json" {
-		return
-	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		panic(err)
@@ -117,7 +115,7 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 	row := tx.QueryRow("SELECT id FROM reader WHERE apiKey = ?", request.ApiKey)
-	var readerId int 
+	var readerId int
 	err = row.Scan(&readerId)
 	if err != nil {
 		tx.Rollback()
@@ -137,7 +135,7 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row = tx.QueryRow("SELECT people.id, name, permission FROM cards INNER JOIN people ON cards.owner = people.id WHERE cards.authtoken = ? and cards.serialNumber = ?", request.Authtoken, request.SerialNumber)
-	//INNER JOIN people ON cards.owner = people.id
+	// INNER JOIN people ON cards.owner = people.id
 	peopleId := 0
 	Name := ""
 	Perm := ""
@@ -173,9 +171,98 @@ func verifyRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func keyRequestHandler(w http.ResponseWriter, r *http.Request) {
-	
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	var request keyRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		ans := keyAns{
+			Ok:  false,
+			Key: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		return
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		panic(err)
+	}
+	row := tx.QueryRow("SELECT id, writeCard FROM reader WHERE apiKey = ?", request.ApiKey)
+	var reader cardReader
+	err = row.Scan(&reader.Id, &reader.WriteCard)
+	if err != nil {
+		tx.Rollback()
+		fmt.Println(err.Error())
+		ans := keyAns{
+			Ok:  false,
+			Key: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("bad api key")
+		addLog(nil, nil, nil, false, nil, "key request denied wrong api key")
+		return
+	}
+	row = tx.QueryRow("SELECT writeKey, readKey permission FROM cards WHERE serialNumber = ?", request.SerialNumber)
+	var readKey string
+	var writeKey string
+	err = row.Scan(&writeKey, &readKey)
+	if err != nil {
+		tx.Rollback()
+		fmt.Println(err.Error())
+		ans := keyAns{
+			Ok:  false,
+			Key: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("bad api key")
+		addLog(request.SerialNumber, reader.Id, nil, false, nil, "scan failed")
+		return
+	}
+	ans := keyAns{
+		Ok:  true,
+		Key: "",
+	}
+	if request.Write {
+		if reader.WriteCard {
+			ans.Key = writeKey
+		} else {
+			ans.Ok = false
+			ans.Key = ""
+		}
+	} else {
+		ans.Key = readKey
+	}
+	js, err := json.Marshal(ans)
+	if err != nil {
+		panic(err)
+	}
+	w.Write(js)
+	tx.Rollback()
+	addLog(request.SerialNumber, reader.Id, nil, ans.Ok, nil, fmt.Sprintf("writekey value was: %T", request.Write))
 }
 
+func jsonAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-type") != "application/json" {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	flag.Parse()
@@ -254,7 +341,8 @@ func main() {
 	go frontend.Authstore.Clean()
 	frontend.AddEndpoints()
 
-	http.HandleFunc("POST /api/request/verify", verifyRequestHandler)
+	http.Handle("POST /api/request/verify", jsonAPI(http.HandlerFunc(verifyRequestHandler)))
+	http.Handle("POST /api/request/verify", jsonAPI(http.HandlerFunc(keyRequestHandler)))
 	http.ListenAndServe(":8090", nil)
 
 	frontend.Authstore.Done <- true

@@ -327,14 +327,17 @@ func AddFactory(title string, fildNames []string, fildTypes []string, table stri
 				if b != "" {
 					queryfilds = append(queryfilds, v)
 					value := r.FormValue(v)
-					if fildTypes[k] == "number" {
+					switch fildTypes[k] {
+					case "number":
 						n, err := strconv.Atoi(value)
 						if err != nil {
 							fmt.Println(err)
 							return
 						}
 						queryvalues = append(queryvalues, n)
-					} else {
+					case "password":
+						queryvalues = append(queryvalues, ComputepwHash([]byte(value)))
+					default:
 						queryvalues = append(queryvalues, value)
 					}
 				}
@@ -395,7 +398,9 @@ func AddEndpoints() {
 	logHandler := TableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
 	http.Handle("/admin/logs", LoginNeeded(http.HandlerFunc(logHandler), false))
 	adminsHandler := TableFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, "admins")
+	adminsAdd := AddFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, []string{"number", "text", "password", "number"}, "admins")
 	http.Handle("/admin/admins", LoginNeeded(http.HandlerFunc(adminsHandler), true))
+	http.Handle("/admin/admins/add", LoginNeeded(http.HandlerFunc(adminsAdd), true))
 	http.Handle("/admin/logout", LoginNeeded(http.HandlerFunc(Logout), false))
 	http.HandleFunc("/admin/login", Login)
 }

@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"database/sql"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -75,6 +77,16 @@ type (
 		Ok         bool   `json:"ok"`
 		Name       string `json:"name"`
 		Permission string `json:"perm"`
+	}
+	addCardRequest struct {
+		ApiKey       string `json:"apikey"`
+		SerialNumber string `json:"serialnumber"`
+	}
+	addCardAns struct {
+		Ok        bool   `json:"ok"`
+		Authtoken string `json:"authtoken"`
+		WriteKey  string `json:"writekey"`
+		ReadKey   string `json:"readkey"`
 	}
 )
 
@@ -252,7 +264,149 @@ func keyRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(js)
 	tx.Rollback()
-	addLog(request.SerialNumber, reader.Id, nil, ans.Ok, nil, fmt.Sprintf("writekey value was: %T", request.Write))
+	addLog(request.SerialNumber, reader.Id, nil, ans.Ok, nil, fmt.Sprintf("writekey value was: %v", request.Write))
+}
+
+func addCardRequestHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	var request addCardRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		ans := addCardAns{
+			Ok:        false,
+			ReadKey:   "",
+			WriteKey:  "",
+			Authtoken: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		return
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		panic(err)
+	}
+	row := tx.QueryRow("SELECT id, addCard FROM reader WHERE apiKey = ?", request.ApiKey)
+	var reader cardReader
+	err = row.Scan(&reader.Id, &reader.AddCard)
+	if err != nil {
+		tx.Rollback()
+		fmt.Println(err.Error())
+		ans := addCardAns{
+			Ok:        false,
+			ReadKey:   "",
+			WriteKey:  "",
+			Authtoken: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("bad api key")
+		addLog(nil, nil, nil, false, nil, "addcard request denied wrong api key")
+		return
+	}
+	if !reader.AddCard {
+		tx.Rollback()
+		ans := addCardAns{
+			Ok:        false,
+			ReadKey:   "",
+			WriteKey:  "",
+			Authtoken: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("permission denied")
+		addLog(nil, reader.Id, nil, false, nil, "card add permission denied")
+		return
+	}
+	readKey := make([]byte, 6)
+	writeKey := make([]byte, 6)
+	authtok := make([]byte, 16)
+	_, err = rand.Read(readKey)
+	if err != nil {
+		panic(err)
+	}
+	_, err = rand.Read(writeKey)
+	if err != nil {
+		panic(err)
+	}
+	_, err = rand.Read(authtok)
+	if err != nil {
+		panic(err)
+	}
+	rkeybuff := bytes.NewBuffer(make([]byte, 0))
+	rkencoder := base64.NewEncoder(base64.RawStdEncoding.Strict(), rkeybuff)
+	_, err = rkencoder.Write(readKey)
+	if err != nil {
+		panic(err)
+	}
+	b64rkey, err := io.ReadAll(rkeybuff)
+	if err != nil {
+		panic(err)
+	}
+	wkeybuff := bytes.NewBuffer(make([]byte, 0))
+	wkencoder := base64.NewEncoder(base64.RawStdEncoding.Strict(), wkeybuff)
+	_, err = wkencoder.Write(writeKey)
+	if err != nil {
+		panic(err)
+	}
+	b64wkey, err := io.ReadAll(wkeybuff)
+	if err != nil {
+		panic(err)
+	}
+	authbuff := bytes.NewBuffer(make([]byte, 0))
+	authencoder := base64.NewEncoder(base64.RawStdEncoding.Strict(), authbuff)
+	_, err = authencoder.Write(readKey)
+	if err != nil {
+		panic(err)
+	}
+	b64auth, err := io.ReadAll(authbuff)
+	if err != nil {
+		panic(err)
+	}
+	ans := addCardAns{
+		Ok:        true,
+		ReadKey:   string(b64rkey),
+		WriteKey:  string(b64wkey),
+		Authtoken: string(b64auth),
+	}
+	_, err = tx.Exec("INSERT INTO cards (serialNumber, authtoken, writeKey, readKey, owner) VALUES (?, ?, ?, ?, 0)", request.SerialNumber, ans.Authtoken, ans.WriteKey, ans.ReadKey)
+	if err != nil {
+		fmt.Println(err.Error())
+		tx.Rollback()
+		ans := addCardAns{
+			Ok:        false,
+			ReadKey:   "",
+			WriteKey:  "",
+			Authtoken: "",
+		}
+		js, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		w.Write(js)
+		fmt.Println("failed to add card to db")
+		addLog(nil, reader.Id, nil, false, nil, "failed to add card")
+		return
+	}
+	js, err := json.Marshal(ans)
+	if err != nil {
+		panic(err)
+	}
+	w.Write(js)
+	tx.Commit()
+	addLog(request.SerialNumber, reader.Id, 0, ans.Ok, nil, "added card")
 }
 
 func jsonAPI(next http.Handler) http.Handler {
@@ -342,7 +496,8 @@ func main() {
 	frontend.AddEndpoints()
 
 	http.Handle("POST /api/request/verify", jsonAPI(http.HandlerFunc(verifyRequestHandler)))
-	http.Handle("POST /api/request/verify", jsonAPI(http.HandlerFunc(keyRequestHandler)))
+	http.Handle("POST /api/request/key", jsonAPI(http.HandlerFunc(keyRequestHandler)))
+	http.Handle("POST /api/request/addCard", jsonAPI(http.HandlerFunc(addCardRequestHandler)))
 	http.ListenAndServe(":8090", nil)
 
 	frontend.Authstore.Done <- true

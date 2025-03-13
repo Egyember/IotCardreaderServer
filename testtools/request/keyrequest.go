@@ -10,27 +10,33 @@ import (
 )
 
 var (
-	writekey = flag.Bool("k", false, "request write key")
-	token    = flag.String("t", "asd", "auth token")
+	apiKey   = flag.String("k", "asd", "api key")
+	writekey = flag.Bool("w", false, "request write key")
 	serial   = flag.String("s", "asd", "serial number")
 )
 
-type verifyRequest struct {
+type keyRequest struct {
 	ApiKey       string `json:"apikey"`
-	Authtoken    string `json:"authtoken"`
 	SerialNumber string `json:"serialnumber"`
+	Write        bool   `json:"write"`
 }
 
 func main() {
 	flag.Parse()
-	ans := verifyRequest{
-		ApiKey:       *key,
-		Authtoken:    *token,
+	ans := keyRequest{
+		ApiKey:       *apiKey,
 		SerialNumber: *serial,
+		Write:        *writekey,
 	}
-	js, _ := json.Marshal(ans)
+	js, err := json.Marshal(ans)
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println(string(js))
-	r, _ := http.DefaultClient.Post("http://localhost:8090/api/request/verify", "application/json", bytes.NewReader(js))
+	r, err := http.DefaultClient.Post("http://localhost:8090/api/request/key", "application/json", bytes.NewReader(js))
+	if err != nil {
+		panic(err)
+	}
 	body, _ := io.ReadAll(r.Body)
 	fmt.Println(len(body))
 	fmt.Println(string(body))

@@ -380,27 +380,125 @@ func AddFactory(title string, fildNames []string, fildTypes []string, table stri
 	}
 }
 
+func DelFactory(title string, fildNames []string, fildTypes []string, table string) http.HandlerFunc {
+	type FildNames struct {
+		Name string
+		Type string
+	}
+	fnames := make([]FildNames, len(fildNames))
+	for k, v := range fildNames {
+		fnames[k].Name = v
+		fnames[k].Type = fildTypes[k]
+	}
+	args := struct {
+		FildNames []FildNames
+		Url       string
+	}{fnames, title}
+	buff := new(bytes.Buffer)
+	Txttmpl.ExecuteTemplate(buff, "magicDel.html.tmpl", args)
+	templ, err := Htmltmpl.Clone()
+	if err != nil {
+		panic(err)
+	}
+	templ, err = templ.Parse(buff.String())
+	if err != nil {
+		panic(err)
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			r.ParseForm()
+			queryfilds := make([]string, 0, len(fildNames))
+			queryvalues := make([]any, 0, len(fildNames))
+			for k, v := range fildNames {
+				b := r.FormValue(v + "box")
+				if b != "" {
+					queryfilds = append(queryfilds, v)
+					value := r.FormValue(v)
+					switch fildTypes[k] {
+					case "number":
+						n, err := strconv.Atoi(value)
+						if err != nil {
+							fmt.Println(err)
+							return
+						}
+						queryvalues = append(queryvalues, n)
+					case "password":
+						queryvalues = append(queryvalues, ComputepwHash([]byte(value)))
+					default:
+						queryvalues = append(queryvalues, value)
+					}
+				}
+			}
+			query := "DELETE FROM " + table + " WHERE "
+			for _, v := range queryfilds {
+				query += v + " = ? AND"
+			}
+			query = query[:len(query)-3]
+			tx, err := Database.Begin()
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			_, err = tx.Exec(query, queryvalues...)
+			if err != nil {
+				fmt.Fprintln(w, err)
+				tx.Rollback()
+				return
+			}
+			err = tx.Commit()
+			if err != nil {
+				fmt.Fprintln(w, err)
+				tx.Rollback()
+				return
+			}
+			http.Redirect(w, r, "/admin/"+title, http.StatusSeeOther)
+
+			return
+		}
+		cont := r.Context()
+		uname := cont.Value(contextkey("uname")).(string)
+		admintab := cont.Value(contextkey("adminTab")).(bool)
+		status := headerdata{Loggedin: true, Title: title, Uname: uname, AdminTab: admintab}
+		err = templ.ExecuteTemplate(w, "magicdel", status)
+	}
+}
+
 func AddEndpoints() {
 	http.HandleFunc("GET /{$}", RootHandler)
 	http.Handle("/admin", LoginNeeded(http.HandlerFunc(Admin), false))
-	cardsHandler := TableFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, "cards")
-	cardsAdd := AddFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, []string{"text", "text", "text", "text", "number"}, "cards")
-	http.Handle("/admin/cards", LoginNeeded(http.HandlerFunc(cardsHandler), false))
-	http.Handle("/admin/cards/add", LoginNeeded(http.HandlerFunc(cardsAdd), false))
-	readerHandler := TableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, "reader")
-	readerAdd := AddFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, []string{"number", "text", "number", "number"}, "reader")
-	http.Handle("/admin/readers", LoginNeeded(http.HandlerFunc(readerHandler), false))
-	http.Handle("/admin/readers/add", LoginNeeded(http.HandlerFunc(readerAdd), false))
-	peopleHandler := TableFactory("people", []string{"id", "name", "permission"}, "people")
-	peopleAdd := AddFactory("people", []string{"id", "name", "permission"}, []string{"number", "text", "text"}, "people")
-	http.Handle("/admin/people", LoginNeeded(http.HandlerFunc(peopleHandler), false))
-	http.Handle("/admin/people/add", LoginNeeded(http.HandlerFunc(peopleAdd), false))
-	logHandler := TableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
-	http.Handle("/admin/logs", LoginNeeded(http.HandlerFunc(logHandler), false))
-	adminsHandler := TableFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, "admins")
-	adminsAdd := AddFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, []string{"number", "text", "password", "number"}, "admins")
-	http.Handle("/admin/admins", LoginNeeded(http.HandlerFunc(adminsHandler), true))
-	http.Handle("/admin/admins/add", LoginNeeded(http.HandlerFunc(adminsAdd), true))
+
 	http.Handle("/admin/logout", LoginNeeded(http.HandlerFunc(Logout), false))
 	http.HandleFunc("/admin/login", Login)
+
+	logHandler := TableFactory("logs", []string{"id", "card", "reader", "people", "allowed", "direction", "comment"}, "accessLog")
+	http.Handle("/admin/logs", LoginNeeded(http.HandlerFunc(logHandler), false))
+
+	cardsHandler := TableFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, "cards")
+	cardsAdd := AddFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, []string{"text", "text", "text", "text", "number"}, "cards")
+	cardsDel := DelFactory("cards", []string{"serialNumber", "authtoken", "writeKey", "readKey", "owner"}, []string{"text", "text", "text", "text", "number"}, "cards")
+	http.Handle("/admin/cards", LoginNeeded(http.HandlerFunc(cardsHandler), false))
+	http.Handle("/admin/cards/add", LoginNeeded(http.HandlerFunc(cardsAdd), false))
+	http.Handle("/admin/cards/delete", LoginNeeded(http.HandlerFunc(cardsDel), false))
+
+	readerHandler := TableFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, "reader")
+	readerAdd := AddFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, []string{"number", "text", "number", "number"}, "reader")
+	readerDel := DelFactory("readers", []string{"id", "apiKey", "addCard", "writeCard"}, []string{"number", "text", "number", "number"}, "reader")
+	http.Handle("/admin/readers", LoginNeeded(http.HandlerFunc(readerHandler), false))
+	http.Handle("/admin/readers/add", LoginNeeded(http.HandlerFunc(readerAdd), false))
+	http.Handle("/admin/readers/delete", LoginNeeded(http.HandlerFunc(readerDel), false))
+
+	peopleHandler := TableFactory("people", []string{"id", "name", "permission"}, "people")
+	peopleAdd := AddFactory("people", []string{"id", "name", "permission"}, []string{"number", "text", "text"}, "people")
+	peopleDel := DelFactory("people", []string{"id", "name", "permission"}, []string{"number", "text", "text"}, "people")
+	http.Handle("/admin/people", LoginNeeded(http.HandlerFunc(peopleHandler), false))
+	http.Handle("/admin/people/add", LoginNeeded(http.HandlerFunc(peopleAdd), false))
+	http.Handle("/admin/people/delete", LoginNeeded(http.HandlerFunc(peopleDel), false))
+
+	adminsHandler := TableFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, "admins")
+	adminsAdd := AddFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, []string{"number", "text", "password", "number"}, "admins")
+	adminsDel := DelFactory("admins", []string{"id", "username", "pwhash", "adminTab"}, []string{"number", "text", "password", "number"}, "admins")
+	http.Handle("/admin/admins", LoginNeeded(http.HandlerFunc(adminsHandler), true))
+	http.Handle("/admin/admins/add", LoginNeeded(http.HandlerFunc(adminsAdd), true))
+	http.Handle("/admin/admins/delete", LoginNeeded(http.HandlerFunc(adminsDel), true))
 }

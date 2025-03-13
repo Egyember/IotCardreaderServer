@@ -1,0 +1,21 @@
+{{"{{"}}define "magicdel" {{"}}"}}
+{{"{{"}}template "header" .{{"}}"}}
+<div class="container mx-auto m-3">
+<h2 style="color: red">Figyelem ez nem kérdez csak csinál.</h2>
+<div>Ezek a mezők lesznek az sql query WHERE részén.</div>
+<form method="post" action="/admin/{{.Url}}/delete">
+		{{range .FildNames}}
+		<div class="mb-3 form-check">
+			<input type="checkbox" class="form-check-input" id="{{.Name}}box" name="{{.Name}}box">
+			<label class="form-check-label" for="{{.Name}}box">taralamazza ezt a mezőt?</label>
+		</div>
+		<div class="mb-3">
+			<label for="{{.Name}}" class="form-label">{{.Name}}</label>
+			<input type="{{.Type}}" class="form-control" id="{{.Name}}" name="{{.Name}}">
+		</div>
+		{{end}}
+      <button type="submit" class="btn btn-primary">küldés</button>
+</form>
+</div>
+{{"{{"}}template "footer"{{"}}"}}
+{{"{{"}}end{{"}}"}}
